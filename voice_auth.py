@@ -40,7 +40,7 @@ class VoiceAuthenticator:
             # 2) Load from the local directory
             self.model = SpeakerRecognition.from_hparams(
                 source="tmp_model", 
-                savedir="tmp_model"
+                savedir=None
             )
             # Load and process reference voice once
             signal, fs = torchaudio.load(self.reference_file)
