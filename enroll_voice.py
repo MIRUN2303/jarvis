@@ -1,5 +1,5 @@
 import sounddevice as sd
-import scipy.io.wavfile as wav
+import wave
 import time
 import os
 
@@ -30,7 +30,13 @@ def record_voice():
     print("\n\n✅ Recording complete!")
     
     # Save as WAV file
-    wav.write(OUTPUT_FILE, FS, recording)
+    # sounddevice returns data as shape (frames, channels)
+    with wave.open(OUTPUT_FILE, 'wb') as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2) # 16-bit
+        wf.setframerate(FS)
+        wf.writeframes(recording.tobytes())
+        
     print(f"Your voice print has been saved to: {os.path.abspath(OUTPUT_FILE)}")
     print("\nJarvis will now use this file to verify your voice!")
 
