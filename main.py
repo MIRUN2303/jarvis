@@ -840,18 +840,152 @@ class JarvisLive:
             await self.session.send_realtime_input(media=msg)
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
+        print("[JARVIS] Mic started")
         loop = asyncio.get_event_loop()
+        HANGOVER = 20  # keep sending ~1.3 s after voice stops (avoids choppy pauses)
+        _hang = [0]     # mutable counter for closure
+
+        # Voice Authentication State
+        _auth = {
+            "status": None,       # None | "BUFFERING" | "VERIFYING" | True | False
+            "buffer": [],
+            "last_voice_time": 0.0
+        }
+
+        def _set_level(rms, noise_floor, threshold, voice):
+            try:
+                self.ui._win.hud.set_level(rms, noise_floor, threshold, voice)
+            except Exception:
+                pass
+
+        def _safe_put(q, item):
+            try:
+                q.put_nowait(item)
+            except Exception:
+                try:
+                    q.get_nowait()  # drain one stale chunk
+                    q.put_nowait(item)
+                except Exception:
+                    pass
 
         def callback(indata, frames, time_info, status):
-            with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
-                data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+            try:
+                rms = float((indata.astype(np.float64) ** 2).mean() ** 0.5)
+                self._vad_frame_count += 1
+
+                with self._speaking_lock:
+                    jarvis_speaking = self._is_speaking
+                
+                # Check if we are in the post-speech deaf period
+                in_cooldown = not jarvis_speaking and (time.monotonic() - getattr(self, '_last_speech_end', 0.0) < 1.2)
+
+                # Only update noise floor if we are fully listening (not speaking, not in echo cooldown)
+                if not jarvis_speaking and not in_cooldown:
+                    if self._vad_frame_count == 1:
+                        self._vad_noise_floor = rms
+                    elif rms < self._vad_noise_floor:
+                        self._vad_noise_floor = self._vad_noise_floor * 0.1 + rms * 0.9
+                    elif self._vad_frame_count % 600 == 0:
+                        self._vad_noise_floor *= 1.01
+
+                    if self._vad_frame_count % 9000 == 0:
+                        self._vad_noise_floor = min(self._vad_noise_floor, rms)
+                        print(f"[VAD] Noise floor reset → {self._vad_noise_floor:.0f}")
+
+                threshold = max(self._vad_noise_floor * 1.8, 300.0)
+                is_voice = rms > threshold
+                
+                # If we are in cooldown, force hangover to 0
+                if in_cooldown:
+                    _hang[0] = 0
+                else:
+                    if is_voice:
+                        _hang[0] = HANGOVER
+                        _auth["last_voice_time"] = time.monotonic()
+                    elif _hang[0] > 0:
+                        _hang[0] -= 1
+
+                send_audio = _hang[0] > 0
+
+                _set_level(rms, self._vad_noise_floor, threshold, is_voice)
+
+                # --- VOICE AUTHENTICATION ---
+                # We need to verify who is speaking BEFORE we allow barge-in or send audio.
+                if self._voice_auth.enabled:
+                    if is_voice and _auth["status"] is None:
+                        _auth["status"] = "BUFFERING"
+                        _auth["buffer"] = []
+                    
+                    if _auth["status"] == "BUFFERING":
+                        _auth["buffer"].append(indata.copy())
+                        total_samples = sum(b.shape[0] for b in _auth["buffer"])
+                        # Wait for ~0.8s of audio to verify
+                        if total_samples >= 12800:
+                            _auth["status"] = "VERIFYING"
+                            def _verify_task(audio_concat):
+                                is_user = self._voice_auth.verify(audio_concat)
+                                def _on_result():
+                                    if is_user:
+                                        _auth["status"] = True
+                                        # Voice verified! If Jarvis is NOT speaking, flush buffer to Gemini
+                                        if not self._is_speaking and not self.ui.muted and not self._phone_active:
+                                            for b in _auth["buffer"]:
+                                                _safe_put(self.out_queue, {"data": b.tobytes(), "mime_type": "audio/pcm"})
+                                    else:
+                                        _auth["status"] = False
+                                    _auth["buffer"].clear()
+                                loop.call_soon_threadsafe(_on_result)
+                            
+                            audio_concat = np.concatenate(_auth["buffer"], axis=0)
+                            threading.Thread(target=_verify_task, args=(audio_concat,), daemon=True).start()
+                            
+                    elif _auth["status"] == "VERIFYING":
+                        _auth["buffer"].append(indata.copy())
+                else:
+                    # Fallback if Speaker Verification is disabled
+                    _auth["status"] = True
+
+                # Reset auth state when voice stops completely
+                if not send_audio and time.monotonic() - _auth["last_voice_time"] > 2.0:
+                    _auth["status"] = None
+                    _auth["buffer"].clear()
+
+                # --- BARGE-IN & AUDIO SENDING ---
+                if jarvis_speaking:
+                    if self.audio_in_queue is not None and self.audio_in_queue.empty():
+                        now_mt = time.monotonic()
+                        if not hasattr(self, '_speaking_since'):
+                            self._speaking_since = now_mt
+                        elif now_mt - self._speaking_since > 15.0:
+                            self._speaking_since = now_mt
+                            loop.call_soon_threadsafe(self.set_speaking, False)
+                    else:
+                        self._speaking_since = time.monotonic()
+
+                    barge_th = max(self._vad_noise_floor * 2.5, 1500.0)
+                    if rms > barge_th and is_voice:
+                        # ONLY trigger barge-in if voice auth passed!
+                        if _auth["status"] is True:
+                            now = time.monotonic()
+                            if now - self._last_interrupt_time > 1.0:
+                                self._last_interrupt_time = now
+                                print(f"[VAD] 🎤 Barge-in triggered (Authenticated): RMS={rms:.0f} > {barge_th:.0f}")
+                                self.interrupt()
+                    return
+                elif in_cooldown:
+                    return
+                else:
+                    self._speaking_since = time.monotonic()
+
+                # Send audio to Gemini (gated by VAD + hangover + Auth)
+                if send_audio and not self.ui.muted and not self._phone_active:
+                    if _auth["status"] is True:
+                        data = indata.tobytes()
+                        msg  = {"data": data, "mime_type": "audio/pcm"}
+                        loop.call_soon_threadsafe(_safe_put, self.out_queue, msg)
+
+            except Exception as e:
+                print(f"[Mic] callback error: {e}")
 
         try:
             with sd.InputStream(
@@ -861,10 +995,11 @@ class JarvisLive:
                 blocksize=CHUNK_SIZE,
                 callback=callback,
             ):
+                print("[JARVIS] Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic error: {e}")
+            print(f"[JARVIS] Mic error: {e}")
             raise
 
     async def _receive_audio(self):
