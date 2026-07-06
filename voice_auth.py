@@ -32,8 +32,14 @@ class VoiceAuthenticator:
     def _init_model(self):
         try:
             print("[VoiceAuth] Downloading/Loading Speaker Verification model (this may take a moment)...")
+            
+            # 1) Safely download the model without using Windows symlinks
+            from huggingface_hub import snapshot_download
+            snapshot_download(repo_id="speechbrain/spkrec-ecapa-voxceleb", local_dir="tmp_model")
+            
+            # 2) Load from the local directory
             self.model = SpeakerRecognition.from_hparams(
-                source="speechbrain/spkrec-ecapa-voxceleb", 
+                source="tmp_model", 
                 savedir="tmp_model"
             )
             # Load and process reference voice once
@@ -45,9 +51,9 @@ class VoiceAuthenticator:
             # Extract embeddings for the reference voice
             self.ref_emb = self.model.encode_batch(signal)
             self.ready = True
-            print("[VoiceAuth] ✅ Speaker Verification ready!")
+            print("[VoiceAuth] [SUCCESS] Speaker Verification ready!")
         except Exception as e:
-            print(f"[VoiceAuth] ❌ Failed to load model: {e}")
+            print(f"[VoiceAuth] [ERROR] Failed to load model: {e}")
             self.enabled = False
 
     def verify(self, audio_data: np.ndarray) -> bool:
