@@ -10,6 +10,21 @@ import subprocess
 import threading
 from pathlib import Path
 from typing import Optional
+import sys
+
+
+def _safe_print(*args, **kwargs):
+    """Print that never crashes on Windows charmap (CP1252) consoles."""
+    try:
+        print(*args, **kwargs)
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        safe = " ".join(
+            str(a).encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
+                sys.stdout.encoding or "utf-8", errors="replace"
+            )
+            for a in args
+        )
+        print(safe, **{k: v for k, v in kwargs.items() if k != "end"})
 
 from playwright.async_api import (
     async_playwright,
@@ -103,12 +118,12 @@ def _real_profile_dir(browser: str) -> str:
 
     for p in candidates:
         if p.exists():
-            print(f"[Browser] ✅ Real profile found for {browser}: {p}")
+            _safe_print(f"[Browser] OK Real profile found for {browser}: {p}")
             return str(p)
 
     fallback = home / ".jarvis_profiles" / browser
     fallback.mkdir(parents=True, exist_ok=True)
-    print(f"[Browser] ⚠️  Real profile not found for {browser}, using: {fallback}")
+    _safe_print(f"[Browser] WARN Real profile not found for {browser}, using: {fallback}")
     return str(fallback)
 
 def _firefox_profile_dir() -> Optional[str]:
@@ -146,7 +161,7 @@ def _firefox_profile_dir() -> Optional[str]:
         default_path = str(base / p) if is_rel else p
 
     if default_path and Path(default_path).exists():
-        print(f"[Browser] Firefox real profile: {default_path}")
+        _safe_print(f"[Browser] Firefox real profile: {default_path}")
         return default_path
     return None
 
@@ -163,7 +178,7 @@ def _find_opera_windows() -> Optional[str]:
     ]
     for p in candidates:
         if p.exists():
-            print(f"[Browser] Opera found at: {p}")
+            _safe_print(f"[Browser] Opera found at: {p}")
             return str(p)
 
     try:
@@ -182,7 +197,7 @@ def _find_opera_windows() -> Optional[str]:
                     winreg.CloseKey(k)
                     exe = val.strip().strip('"').split('"')[0].split(" --")[0].strip()
                     if exe and Path(exe).exists():
-                        print(f"[Browser] Opera found via registry: {exe}")
+                        _safe_print(f"[Browser] Opera found via registry: {exe}")
                         return exe
                 except Exception:
                     continue
@@ -275,7 +290,7 @@ def _resolve_browser(name: str) -> dict | None:
     if spec.get("special") == "opera_windows":
         exe = _find_opera_windows()
         if not exe:
-            print(f"[Browser] ⚠️  Opera executable not found on Windows.")
+            _safe_print(f"[Browser] WARN Opera executable not found on Windows.")
         return {"engine": engine, "exe": exe, "channel": channel}
 
     for b in bins:
@@ -446,7 +461,7 @@ class _BrowserSession:
 
             await asyncio.sleep(0.5)  
             self._page = await self._context.new_page()
-            print(f"[Browser] ✅ Firefox launched")
+            _safe_print(f"[Browser] OK Firefox launched")
             return
 
         if engine_name == "webkit":
@@ -461,7 +476,7 @@ class _BrowserSession:
             self._context = await engine_obj.launch_persistent_context(safari_profile, **kwargs)
             await asyncio.sleep(0.5)
             self._page = await self._context.new_page()
-            print(f"[Browser] ✅ Safari launched")
+            _safe_print(f"[Browser] OK Safari launched")
             return
 
         profile = _real_profile_dir(self.browser_name)
@@ -495,20 +510,20 @@ class _BrowserSession:
             self._context = await engine_obj.launch_persistent_context(profile, **kwargs)
             await asyncio.sleep(0.5) 
             self._page = await self._context.new_page()
-            print(f"[Browser] ✅ Launched [{label}] profile={profile}")
+            _safe_print(f"[Browser] OK Launched [{label}] profile={profile}")
             return
         except Exception as e:
-            print(f"[Browser] ⚠️  Real profile failed for {label}: {e}")
+            _safe_print(f"[Browser] WARN Real profile failed for {label}: {e}")
 
         jarvis_profile = str(Path.home() / ".jarvis_profiles" / self.browser_name)
         Path(jarvis_profile).mkdir(parents=True, exist_ok=True)
-        print(f"[Browser] Retrying with JARVIS profile: {jarvis_profile}")
+        _safe_print(f"[Browser] Retrying with JARVIS profile: {jarvis_profile}")
 
         try:
             self._context = await engine_obj.launch_persistent_context(jarvis_profile, **kwargs)
             await asyncio.sleep(0.5)
             self._page = await self._context.new_page()
-            print(f"[Browser] ✅ Launched [{label}] with JARVIS profile")
+            _safe_print(f"[Browser] OK Launched [{label}] with JARVIS profile")
         except Exception as e2:
             raise RuntimeError(f"Could not launch {self.browser_name}: {e2}") from e2
 
@@ -535,19 +550,19 @@ class _BrowserSession:
             except PlaywrightTimeout:
                 pass   # page may have partially loaded — check URL below
             except Exception as e:
-                print(f"[Browser] goto exception (non-fatal): {e}")
+                _safe_print(f"[Browser] goto exception (non-fatal): {e}")
             return p.url
 
         result_url = await _do_goto(page)
 
         if result_url in ("about:blank", "", None, prev_url) and prev_url in ("about:blank", "", None):
-            print(f"[Browser] Still blank after goto — retrying on new tab: {url}")
+            _safe_print(f"[Browser] Still blank after goto — retrying on new tab: {url}")
             try:
                 new_page   = await self._context.new_page()
                 self._page = new_page
                 result_url = await _do_goto(new_page)
             except Exception as e:
-                print(f"[Browser] New-tab retry failed: {e}")
+                _safe_print(f"[Browser] New-tab retry failed: {e}")
 
         if result_url and result_url not in ("about:blank", "", None):
             return f"Opened: {result_url}"
@@ -606,6 +621,22 @@ class _BrowserSession:
             return f"Pressed: {key}"
         except Exception as e:
             return f"Key error: {e}"
+
+    async def switch_tab(self, direction: str = "next") -> str:
+        page = self._page
+        if not page or page.is_closed():
+            return "No active page."
+        try:
+            if direction == "next":
+                await page.keyboard.press("Control+Tab")
+                return "Switched to next tab."
+            elif direction == "prev":
+                await page.keyboard.press("Control+Shift+Tab")
+                return "Switched to previous tab."
+            else:
+                return f"Unknown direction: {direction}"
+        except Exception as e:
+            return f"Tab switch error: {e}"
 
     async def get_text(self) -> str:
         page = await self._get_page()
@@ -748,7 +779,7 @@ class _SessionRegistry:
                 sess = _BrowserSession(browser_name)
                 sess.start()
                 self._sessions[browser_name] = sess
-                print(f"[Registry] New session: {browser_name}")
+                _safe_print(f"[Registry] New session: {browser_name}")
             return self._sessions[browser_name]
 
     def get(self, browser_name: str | None = None) -> _BrowserSession:
@@ -863,6 +894,8 @@ def browser_control(
             result = sess.run(sess.new_tab(params.get("url", "")))
         elif action == "close_tab":
             result = sess.run(sess.close_tab())
+        elif action == "switch_tab":
+            result = sess.run(sess.switch_tab(params.get("direction", "next")))
         elif action == "screenshot":
             result = sess.run(sess.screenshot(params.get("path")))
         elif action == "back":
@@ -887,7 +920,11 @@ def browser_control(
 
 
 def _log(player, text: str):
-    short = str(text)[:80]
-    print(f"[Browser] {short}")
+    # Sanitize for Windows charmap (CP1252) consoles
+    raw   = str(text)[:80]
+    short = raw.encode(sys.stdout.encoding or "utf-8", errors="replace").decode(
+        sys.stdout.encoding or "utf-8", errors="replace"
+    )
+    _safe_print(f"[Browser] {short}")
     if player:
         player.write_log(f"[browser] {short[:60]}")

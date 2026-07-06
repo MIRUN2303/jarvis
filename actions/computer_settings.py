@@ -521,6 +521,8 @@ ACTION_MAP: dict[str, callable] = {
     "play_pause":          pause_video,
     "close_app":           close_app,
     "close_window":        close_window,
+    "close":               close_tab,
+    "close_tab_os":        close_tab,
     "full_screen":         full_screen,
     "fullscreen":          full_screen,
     "minimize":            minimize_window,

@@ -272,6 +272,11 @@ class HudCanvas(QWidget):
         self._face_px: QPixmap | None = None
         self._load_face(face_path)
 
+        self._rms         = 0.0
+        self._noise_floor = 0.0
+        self._threshold   = 0.0
+        self._voice       = False
+
         self._tmr = QTimer(self)
         self._tmr.timeout.connect(self._step)
         self._tmr.start(16)
@@ -345,6 +350,12 @@ class HudCanvas(QWidget):
             self._blink = not self._blink
             self._blink_tick = 0
         self.update()
+
+    def set_level(self, rms: float, noise_floor: float, threshold: float, voice: bool):
+        self._rms = rms
+        self._noise_floor = noise_floor
+        self._threshold = threshold
+        self._voice = voice
 
     def paintEvent(self, _):
         p = QPainter(self)
@@ -502,6 +513,43 @@ class HudCanvas(QWidget):
                 hgt = int(3 + 2 * math.sin(self._tick * 0.09 + i * 0.6))
                 cl  = qcol(C.BORDER_B)
             p.fillRect(QRectF(wx0 + i * bw, wy + 20 - hgt, bw - 1, hgt), cl)
+
+        # level meter bars (right side)
+        lm_x = W - 56
+        lm_y = int(H * 0.12)
+        lm_h = int(H * 0.60)
+        lm_w = 18
+        gap = 4
+
+        def _clamp_lvl(v):
+            return max(0.0, min(1.0, v / 20000.0))
+
+        def _draw_meter(x, y, h, w, val, fill_col, label, thresh_col=None, thresh_val=None):
+            bar_h = int(_clamp_lvl(val) * h)
+            bg_rect = QRectF(x, y, w, h)
+            p.setPen(QPen(qcol(C.BORDER_B, 80), 1))
+            p.setBrush(QBrush(qcol(C.DARK)))
+            p.drawRoundedRect(bg_rect, 3, 3)
+            if bar_h > 0:
+                fg_rect = QRectF(x, y + h - bar_h, w, bar_h)
+                p.setPen(Qt.PenStyle.NoPen)
+                grad = QLinearGradient(x, y + h, x, y)
+                grad.setColorAt(0.0, qcol(fill_col, 60))
+                grad.setColorAt(1.0, qcol(fill_col, 220))
+                p.setBrush(QBrush(grad))
+                p.drawRoundedRect(fg_rect, 3, 3)
+            if thresh_col and thresh_val is not None:
+                th_y = y + h - int(_clamp_lvl(thresh_val) * h)
+                p.setPen(QPen(qcol(thresh_col, 180), 2))
+                p.drawLine(int(x - 2), th_y, int(x + w + 2), th_y)
+            p.setPen(QPen(qcol(C.TEXT_DIM), 1))
+            p.setFont(QFont("Courier New", 7))
+            p.drawText(QRectF(x - 10, y - 14, w + 20, 14), Qt.AlignmentFlag.AlignCenter, label)
+
+        _draw_meter(lm_x, lm_y, lm_h, lm_w, self._rms, C.PRI,
+                    "VOICE", C.ACC, self._threshold)
+        _draw_meter(lm_x + lm_w + gap, lm_y, lm_h, lm_w - 4, self._noise_floor, C.PRI_DIM,
+                    "NOISE")
 
 class MetricBar(QWidget):
 
@@ -2386,6 +2434,16 @@ class JarvisUI:
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
         self._win.show()
+        # Force window onto the primary screen and raise to front
+        screen = self._app.primaryScreen().availableGeometry()
+        w, h = _DEFAULT_W, _DEFAULT_H
+        self._win.setGeometry(
+            (screen.width() - w) // 2,
+            (screen.height() - h) // 2,
+            w, h,
+        )
+        self._win.raise_()
+        self._win.activateWindow()
         self.root = _RootShim(self._app)
 
     @property

@@ -15,6 +15,12 @@ if _platform.system() == "Windows":
     _subprocess.Popen = _Popen
 # ─────────────────────────────────────────────────────────────────────────────
 
+import logging
+import warnings
+warnings.filterwarnings("ignore", message="Setting the shape")
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 import asyncio
 import re
 import threading
@@ -25,6 +31,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 
+import numpy as np
 import sounddevice as sd
 from google import genai
 from google.genai import types
@@ -236,7 +243,7 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "The action to perform"},
+                "action":      {"type": "STRING", "description": "Available: volume_up, volume_down, mute, toggle_wifi, close (close tab/window), close_app (Alt+F4), close_window/close_tab (Ctrl+W), new_tab, next_tab, prev_tab, fullscreen, minimize, maximize, dark_mode, screenshot, lock_screen, restart, shutdown, type_text, press_key, scroll_up, scroll_down, reload, toggle_wifi, brightness_up, brightness_down, sleep_display, copy, paste, open_settings, file_explorer"},
                 "description": {"type": "STRING", "description": "Natural language description of what to do"},
                 "value":       {"type": "STRING", "description": "Optional value: volume level, text to type, etc."}
             },
@@ -254,7 +261,7 @@ TOOL_DECLARATIONS = [
         "parameters": {
             "type": "OBJECT",
             "properties": {
-                "action":      {"type": "STRING", "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"},
+                "action":      {"type": "STRING", "description": "go_to | search | click | type | scroll | fill_form | smart_click | smart_type | get_text | get_url | press | new_tab | close_tab | switch_tab | screenshot | back | forward | reload | switch | list_browsers | close | close_all"},
                 "browser":     {"type": "STRING", "description": "Target browser: chrome | edge | firefox | opera | operagx | brave | vivaldi | safari. Omit to use the currently active browser."},
                 "url":         {"type": "STRING", "description": "URL for go_to / new_tab action"},
                 "query":       {"type": "STRING", "description": "Search query for search action"},
@@ -262,7 +269,7 @@ TOOL_DECLARATIONS = [
                 "selector":    {"type": "STRING", "description": "CSS selector for click/type"},
                 "text":        {"type": "STRING", "description": "Text to click or type"},
                 "description": {"type": "STRING", "description": "Element description for smart_click/smart_type"},
-                "direction":   {"type": "STRING", "description": "up | down for scroll"},
+                "direction":   {"type": "STRING", "description": "up | down for scroll; next | prev for switch_tab"},
                 "amount":      {"type": "INTEGER", "description": "Scroll amount in pixels (default: 500)"},
                 "key":         {"type": "STRING", "description": "Key name for press action (e.g. Enter, Escape, F5)"},
                 "path":        {"type": "STRING", "description": "Save path for screenshot"},
@@ -533,6 +540,10 @@ class JarvisLive:
         self._vision_last_time     = 0.0     # monotonic time of last screen_process call (cooldown guard)
         self._vision_busy          = False   # True while a vision capture/inject cycle is in flight
         self._interrupted          = False   # True while draining audio after user interrupt
+        self._vad_noise_floor      = 0.0     # adaptive noise floor — set from first audio frame
+        self._vad_frame_count      = 0
+        self._vad_voice_hits       = 0       # consecutive voice frame counter (hysteresis)
+        self._last_interrupt_time  = 0.0
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
@@ -650,7 +661,7 @@ class JarvisLive:
         name = fc.name
         args = dict(fc.args or {})
 
-        print(f"[JARVIS] 🔧 {name}  {args}")
+        print(f"[JARVIS] Tool: {name}  {args}")
         self.ui.set_state("THINKING")
 
         if name == "save_memory":
@@ -659,7 +670,7 @@ class JarvisLive:
             value    = args.get("value", "")
             if key and value:
                 update_memory({category: {key: {"value": value}}})
-                print(f"[Memory] 💾 save_memory: {category}/{key} = {value}")
+                print(f"[Memory] save_memory: {category}/{key} = {value}")
             if not self.ui.muted:
                 self.ui.set_state("LISTENING")
             return types.FunctionResponse(
@@ -716,11 +727,11 @@ class JarvisLive:
                         img_b, mime_t = await loop.run_in_executor(None, _capture_camera)
                         self.ui.start_camera_stream()
                         self._vision_cam_active = True
-                        print(f"[Vision] 📷 Camera: {len(img_b):,} bytes")
+                        print(f"[Vision] Camera: {len(img_b):,} bytes")
                         _stall = "camera"
                     else:
                         img_b, mime_t = await loop.run_in_executor(None, _capture_screen)
-                        print(f"[Vision] 🖥️  Screen: {len(img_b):,} bytes")
+                        print(f"[Vision] Screen: {len(img_b):,} bytes")
                         _stall = "screen"
                     self._pending_vision = (img_b, mime_t, user_text, angle)
                     result = (
@@ -805,7 +816,7 @@ class JarvisLive:
         if not self.ui.muted:
             self.ui.set_state("LISTENING")
 
-        print(f"[JARVIS] 📤 {name} → {str(result)[:80]}")
+        print(f"[JARVIS] Response: {name} -> {str(result)[:80]}")
         return types.FunctionResponse(
             id=fc.id, name=name,
             response={"result": result}
@@ -817,18 +828,70 @@ class JarvisLive:
             await self.session.send_realtime_input(media=msg)
 
     async def _listen_audio(self):
-        print("[JARVIS] 🎤 Mic started")
+        print("[JARVIS] Mic started")
         loop = asyncio.get_event_loop()
+        HANGOVER = 20  # keep sending ~1.3 s after voice stops (avoids choppy pauses)
+        _hang = [0]     # mutable counter for closure
+
+        def _set_level(rms, noise_floor, threshold, voice):
+            try:
+                self.ui._win.hud.set_level(rms, noise_floor, threshold, voice)
+            except Exception:
+                pass
 
         def callback(indata, frames, time_info, status):
-            with self._speaking_lock:
-                jarvis_speaking = self._is_speaking
-            if not jarvis_speaking and not self.ui.muted and not self._phone_active:
-                data = indata.tobytes()
-                loop.call_soon_threadsafe(
-                    self.out_queue.put_nowait,
-                    {"data": data, "mime_type": "audio/pcm"}
-                )
+            try:
+                rms = float((indata.astype(np.float64) ** 2).mean() ** 0.5)
+                self._vad_frame_count += 1
+
+                # Noise floor = running minimum with slow release
+                if self._vad_frame_count == 1:
+                    self._vad_noise_floor = rms
+                elif rms < self._vad_noise_floor:
+                    self._vad_noise_floor = self._vad_noise_floor * 0.3 + rms * 0.7
+                elif self._vad_frame_count % 300 == 0:
+                    self._vad_noise_floor *= 1.03  # 3% rise every ~19 s
+
+                threshold = max(self._vad_noise_floor * 2.5, 500.0)
+                is_voice = rms > threshold
+
+                # Hangover: keep sending for a while after voice stops
+                if is_voice:
+                    _hang[0] = HANGOVER
+                elif _hang[0] > 0:
+                    _hang[0] -= 1
+
+                send_audio = _hang[0] > 0
+
+                # Print VAD state periodically for debugging
+                if self._vad_frame_count % 150 == 0:
+                    print(f"[VAD] RMS={rms:.0f} floor={self._vad_noise_floor:.0f} "
+                          f"thresh={threshold:.0f} voice={is_voice} send={send_audio} "
+                          f"hang={_hang[0]}")
+
+                _set_level(rms, self._vad_noise_floor, threshold, is_voice)
+
+                # Barge-in (only when JARVIS is speaking)
+                with self._speaking_lock:
+                    jarvis_speaking = self._is_speaking
+                if jarvis_speaking:
+                    barge_th = max(self._vad_noise_floor * 4.0, 4000.0)
+                    if rms > barge_th and is_voice:
+                        now = time.monotonic()
+                        if now - self._last_interrupt_time > 1.0:
+                            self._last_interrupt_time = now
+                            self.interrupt()
+                    return
+
+                # Send audio to Gemini (gated by VAD + hangover)
+                if send_audio and not self.ui.muted and not self._phone_active:
+                    data = indata.tobytes()
+                    loop.call_soon_threadsafe(
+                        self.out_queue.put_nowait,
+                        {"data": data, "mime_type": "audio/pcm"}
+                    )
+            except Exception as e:
+                print(f"[Mic] callback error: {e}")
 
         try:
             with sd.InputStream(
@@ -838,15 +901,15 @@ class JarvisLive:
                 blocksize=CHUNK_SIZE,
                 callback=callback,
             ):
-                print("[JARVIS] 🎤 Mic stream open")
+                print("[JARVIS] Mic stream open")
                 while True:
                     await asyncio.sleep(0.1)
         except Exception as e:
-            print(f"[JARVIS] ❌ Mic: {e}")
+            print(f"[JARVIS] Mic error: {e}")
             raise
 
     async def _receive_audio(self):
-        print("[JARVIS] 👂 Recv started")
+        print("[JARVIS] Recv started")
         out_buf, in_buf = [], []
 
         try:
@@ -857,6 +920,7 @@ class JarvisLive:
                         if self._interrupted:
                             pass  # discard: interrupted
                         else:
+                            self.set_speaking(True)  # block mic immediately
                             if self._turn_done_event and self._turn_done_event.is_set():
                                 self._turn_done_event.clear()
                             # Split into ~50 ms chunks so interrupt() stops audio within 50 ms
@@ -920,7 +984,7 @@ class JarvisLive:
                                 img_b, mime_t, question, angle = self._pending_vision
                                 self._pending_vision = None
                                 b64 = _b64.b64encode(img_b).decode("ascii")
-                                print(f"[Vision] 📤 {len(img_b):,} bytes (angle={angle}) → main session")
+                                print(f"[Vision] Send {len(img_b):,} bytes (angle={angle}) to main session")
                                 await self.session.send_client_content(
                                     turns={"parts": [
                                         {"inline_data": {"mime_type": mime_t, "data": b64}},
@@ -948,19 +1012,19 @@ class JarvisLive:
                     if response.tool_call:
                         fn_responses = []
                         for fc in response.tool_call.function_calls:
-                            print(f"[JARVIS] 📞 {fc.name}")
+                            print(f"[JARVIS] Call: {fc.name}")
                             fr = await self._execute_tool(fc)
                             fn_responses.append(fr)
                         await self.session.send_tool_response(
                             function_responses=fn_responses
                         )
         except Exception as e:
-            print(f"[JARVIS] ❌ Recv: {e}")
+            print(f"[JARVIS] Recv error: {e}")
             traceback.print_exc()
             raise
 
     async def _play_audio(self):
-        print("[JARVIS] 🔊 Play started")
+        print("[JARVIS] Play started")
 
         stream = sd.RawOutputStream(
             samplerate=RECEIVE_SAMPLE_RATE,
@@ -992,7 +1056,7 @@ class JarvisLive:
                 except (RuntimeError, asyncio.CancelledError):
                     break   # executor shutting down — exit cleanly
         except Exception as e:
-            print(f"[JARVIS] ❌ Play: {e}")
+            print(f"[JARVIS] Play error: {e}")
             raise
         finally:
             self.set_speaking(False)
@@ -1308,7 +1372,7 @@ def main():
         try:
             asyncio.run(jarvis.run())
         except KeyboardInterrupt:
-            print("\n🔴 Shutting down...")
+            print("\nShutting down...")
 
     threading.Thread(target=runner, daemon=True).start()
     ui.root.mainloop()

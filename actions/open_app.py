@@ -1,7 +1,9 @@
+import os
 import time
 import subprocess
 import platform
 import shutil
+from pathlib import Path
 
 try:
     import psutil
@@ -59,6 +61,13 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "notion":             {"Windows": "Notion",                  "Darwin": "Notion",               "Linux": "notion"},
     "obsidian":           {"Windows": "Obsidian",                "Darwin": "Obsidian",             "Linux": "obsidian"},
     "capcut":             {"Windows": "CapCut",                  "Darwin": "CapCut",               "Linux": "capcut"},
+    "premiere pro":        {"Windows": "Adobe Premiere Pro",      "Darwin": "Adobe Premiere Pro",   "Linux": ""},
+    "premier pro":         {"Windows": "Adobe Premiere Pro",      "Darwin": "Adobe Premiere Pro",   "Linux": ""},
+    "adobe premiere pro":  {"Windows": "Adobe Premiere Pro",      "Darwin": "Adobe Premiere Pro",   "Linux": ""},
+    "anti gravity":        {"Windows": "Anti Gravity",            "Darwin": "Anti Gravity",         "Linux": ""},
+    "after effects":       {"Windows": "Adobe After Effects",     "Darwin": "Adobe After Effects",  "Linux": ""},
+    "photoshop":           {"Windows": "Adobe Photoshop",         "Darwin": "Adobe Photoshop",      "Linux": ""},
+    "illustrator":         {"Windows": "Adobe Illustrator",       "Darwin": "Adobe Illustrator",    "Linux": ""},
     "steam":              {"Windows": "steam",                   "Darwin": "Steam",                "Linux": "steam"},
     "epic":               {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
     "epic games":         {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
@@ -78,6 +87,17 @@ def _normalize(raw: str) -> str:
     return raw  
 
 def _launch_windows(app_name: str) -> bool:
+
+    desktop = Path.home() / "Desktop"
+    if desktop.exists():
+        for lnk in desktop.glob("*.lnk"):
+            if app_name.lower() in lnk.stem.lower():
+                try:
+                    os.startfile(str(lnk))
+                    time.sleep(1.5)
+                    return True
+                except Exception:
+                    pass
 
     if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
         try:
@@ -248,9 +268,10 @@ def open_app(
         if normalized.lower() != app_name.lower():
             if launcher(app_name):
                 return f"Opened {app_name}."
+        print(f"[open_app] Failed to find/launch '{app_name}' via any method on desktop")
         return (
-            f"Could not confirm that {app_name} launched. "
-            f"It may still be loading, or it might not be installed."
+            f"NOT_FOUND_ON_DESKTOP: Could not find {app_name} on the desktop or installed apps. "
+            f"Search the web for '{app_name}' to download or open it online."
         )
     except Exception as e:
         print(f"[open_app] Error: {e}")

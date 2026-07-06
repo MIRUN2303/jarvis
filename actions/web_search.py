@@ -290,7 +290,7 @@ def web_search(
     if player:
         player.write_log(f"[Search:{mode}] {query or ', '.join(items)}")
 
-    print(f"[WebSearch] 🔍 mode={mode!r}  query={query!r}")
+    print(f"[WebSearch] mode={mode!r}  query={query!r}")
 
     try:
         if mode == "compare" and items:
