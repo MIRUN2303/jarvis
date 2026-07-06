@@ -544,6 +544,7 @@ class JarvisLive:
         self._vad_frame_count      = 0
         self._vad_voice_hits       = 0       # consecutive voice frame counter (hysteresis)
         self._last_interrupt_time  = 0.0
+        self._last_speech_end      = 0.0     # Cooldown tracker for room echo
         self.ui.on_text_command   = self._on_text_command
         self.ui.on_remote_clicked = self._make_remote_key
         self.ui.on_interrupt      = self.interrupt
@@ -583,8 +584,10 @@ class JarvisLive:
             self._is_speaking = value
         if value:
             self.ui.set_state("SPEAKING")
-        elif not self.ui.muted:
-            self.ui.set_state("LISTENING")
+        else:
+            self._last_speech_end = time.monotonic()
+            if not self.ui.muted:
+                self.ui.set_state("LISTENING")
 
     def interrupt(self) -> None:
         """Stop JARVIS mid-speech: drain queued audio and open mic immediately."""
@@ -916,6 +919,11 @@ class JarvisLive:
                 else:
                     # Not speaking — clear the stuck-speaking timer
                     self._speaking_since = time.monotonic()
+
+                    # Echo cooldown: ignore mic for 1.2s after Jarvis finishes speaking
+                    # to prevent it from hearing its own room echo and entering an infinite loop
+                    if time.monotonic() - self._last_speech_end < 1.2:
+                        return
 
                 # Send audio to Gemini (gated by VAD + hangover)
                 if send_audio and not self.ui.muted and not self._phone_active:
