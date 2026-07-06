@@ -1248,7 +1248,12 @@ class RemoteKeyOverlay(QWidget):
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             buf = BytesIO()
-            img.save(buf, format="PNG")
+            # Detect backend: PilImage (Pillow) accepts format=; PyPNGImage does not.
+            from qrcode.image.pure import PyPNGImage
+            if isinstance(img, PyPNGImage):
+                img.save(buf)
+            else:
+                img.save(buf, format="PNG")
             px = QPixmap()
             px.loadFromData(buf.getvalue())
             self._qr_label.setPixmap(
@@ -2433,8 +2438,8 @@ class JarvisUI:
         self._app = QApplication.instance() or QApplication(sys.argv)
         self._app.setStyle("Fusion")
         self._win = MainWindow(face_path)
-        self._win.show()
-        # Force window onto the primary screen and raise to front
+
+        # Force window onto the primary screen centered
         screen = self._app.primaryScreen().availableGeometry()
         w, h = _DEFAULT_W, _DEFAULT_H
         self._win.setGeometry(
@@ -2442,8 +2447,23 @@ class JarvisUI:
             (screen.height() - h) // 2,
             w, h,
         )
+
+        # Briefly set StaysOnTop so the window appears above VS Code etc.
+        # then remove the flag after 1 s so it doesn't permanently float.
+        self._win.setWindowFlags(
+            self._win.windowFlags() | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self._win.show()
         self._win.raise_()
         self._win.activateWindow()
+
+        def _clear_top_hint():
+            self._win.setWindowFlags(
+                self._win.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint
+            )
+            self._win.show()   # re-show required after flag change
+
+        QTimer.singleShot(1000, _clear_top_hint)
         self.root = _RootShim(self._app)
 
     @property
