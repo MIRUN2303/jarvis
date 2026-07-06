@@ -5,7 +5,7 @@ import queue
 
 try:
     import torch
-    import torchaudio
+    import soundfile as sf
     from speechbrain.inference.speaker import SpeakerRecognition
     HAS_SPEECHBRAIN = True
 except ImportError:
@@ -43,8 +43,18 @@ class VoiceAuthenticator:
                 savedir=None
             )
             # Load and process reference voice once
-            signal, fs = torchaudio.load(self.reference_file)
+            import soundfile as sf
+            data, fs = sf.read(self.reference_file)
+            # soundfile reads as float64, normalize and convert
+            data = data.astype(np.float32)
+            if data.ndim > 1:
+                data = data[:, 0]
+            
+            signal = torch.from_numpy(data).unsqueeze(0)
+            
             if fs != 16000:
+                # Fallback to torchaudio resample if needed, but we save at 16000 anyway
+                import torchaudio
                 resampler = torchaudio.transforms.Resample(orig_freq=fs, new_freq=16000)
                 signal = resampler(signal)
             
@@ -72,11 +82,12 @@ class VoiceAuthenticator:
             # Get embedding for mic audio
             mic_emb = self.model.encode_batch(signal)
             
-            # Compute cosine similarity
-            score = torch.nn.functional.cosine_similarity(self.ref_emb, mic_emb)
+            # Compute similarity using the model's built-in metric
+            score_tensor = self.model.similarity(self.ref_emb, mic_emb)
+            score = score_tensor.item()
             
-            print(f"[VoiceAuth] Match score: {score.item():.3f} (Threshold: {self.threshold})")
-            return score.item() > self.threshold
+            print(f"[VoiceAuth] Match score: {score:.3f} (Threshold: {self.threshold})")
+            return score > self.threshold
             
         except Exception as e:
             print(f"[VoiceAuth] Verification error: {e}")
