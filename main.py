@@ -847,53 +847,48 @@ class JarvisLive:
                 rms = float((indata.astype(np.float64) ** 2).mean() ** 0.5)
                 self._vad_frame_count += 1
 
-                # Freeze noise floor updates while Jarvis is speaking to prevent
-                # speaker bleed from inflating the floor and making barge-in impossible.
                 with self._speaking_lock:
-                    _currently_speaking = self._is_speaking
+                    jarvis_speaking = self._is_speaking
+                
+                # Check if we are in the post-speech deaf period
+                in_cooldown = not jarvis_speaking and (time.monotonic() - getattr(self, '_last_speech_end', 0.0) < 1.2)
 
-                if not _currently_speaking:
+                # Only update noise floor if we are fully listening (not speaking, not in echo cooldown)
+                if not jarvis_speaking and not in_cooldown:
                     # Noise floor = running minimum with fast pull-down, slow drift-up
                     if self._vad_frame_count == 1:
                         self._vad_noise_floor = rms
                     elif rms < self._vad_noise_floor:
-                        # Pull floor DOWN quickly when environment is quiet
                         self._vad_noise_floor = self._vad_noise_floor * 0.1 + rms * 0.9
                     elif self._vad_frame_count % 600 == 0:
-                        # Very gentle upward drift every ~38 s
                         self._vad_noise_floor *= 1.01
 
-                    # Hard-reset noise floor every ~5 minutes to prevent permanent drift
                     if self._vad_frame_count % 9000 == 0:
                         self._vad_noise_floor = min(self._vad_noise_floor, rms)
                         print(f"[VAD] Noise floor reset → {self._vad_noise_floor:.0f}")
 
-                # Lower multiplier (1.8 vs 2.5) + lower minimum (300 vs 500)
                 threshold = max(self._vad_noise_floor * 1.8, 300.0)
                 is_voice = rms > threshold
 
-                # Hangover: keep sending for a while after voice stops
-                if is_voice:
-                    _hang[0] = HANGOVER
-                elif _hang[0] > 0:
-                    _hang[0] -= 1
+                # If we are in cooldown, force hangover to 0 so it doesn't carry over
+                if in_cooldown:
+                    _hang[0] = 0
+                else:
+                    if is_voice:
+                        _hang[0] = HANGOVER
+                    elif _hang[0] > 0:
+                        _hang[0] -= 1
 
                 send_audio = _hang[0] > 0
 
-                # Print VAD state periodically for debugging
                 if self._vad_frame_count % 150 == 0:
                     print(f"[VAD] RMS={rms:.0f} floor={self._vad_noise_floor:.0f} "
                           f"thresh={threshold:.0f} voice={is_voice} send={send_audio} "
-                          f"hang={_hang[0]}")
+                          f"hang={_hang[0]} cool={in_cooldown}")
 
                 _set_level(rms, self._vad_noise_floor, threshold, is_voice)
 
-                # Barge-in (only when JARVIS is speaking)
-                # Note: _currently_speaking was read above (before noise floor update)
-                jarvis_speaking = _currently_speaking
                 if jarvis_speaking:
-                    # Safety valve: if JARVIS has been "speaking" for > 15 s with no
-                    # audio queue activity, it's likely a stuck flag — release the mic.
                     if self.audio_in_queue is not None and self.audio_in_queue.empty():
                         now_mt = time.monotonic()
                         if not hasattr(self, '_speaking_since'):
@@ -905,9 +900,6 @@ class JarvisLive:
                     else:
                         self._speaking_since = time.monotonic()
 
-                    # Lower threshold so a normal speaking voice triggers barge-in.
-                    # 2.5x noise floor (min 1500) is sensitive enough to catch speech
-                    # without false-triggering on quiet background noise.
                     barge_th = max(self._vad_noise_floor * 2.5, 1500.0)
                     if rms > barge_th and is_voice:
                         now = time.monotonic()
@@ -916,14 +908,10 @@ class JarvisLive:
                             print(f"[VAD] 🎤 Barge-in triggered: RMS={rms:.0f} > threshold={barge_th:.0f}")
                             self.interrupt()
                     return
+                elif in_cooldown:
+                    return
                 else:
-                    # Not speaking — clear the stuck-speaking timer
                     self._speaking_since = time.monotonic()
-
-                    # Echo cooldown: ignore mic for 1.2s after Jarvis finishes speaking
-                    # to prevent it from hearing its own room echo and entering an infinite loop
-                    if time.monotonic() - self._last_speech_end < 1.2:
-                        return
 
                 # Send audio to Gemini (gated by VAD + hangover)
                 if send_audio and not self.ui.muted and not self._phone_active:
@@ -1081,6 +1069,7 @@ class JarvisLive:
             channels=CHANNELS,
             dtype="int16",
             blocksize=CHUNK_SIZE,
+            latency="low"
         )
         stream.start()
 
