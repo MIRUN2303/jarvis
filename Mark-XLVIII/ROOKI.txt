@@ -1,0 +1,201 @@
+╔══════════════════════════════════════════════════════╗
+║                     ROOKI                            ║
+║        Real-time Voice AI — Your Desktop Brain        ║
+╚══════════════════════════════════════════════════════╝
+
+WHAT IS ROOKI?
+────────────────────────────────────────────────────────
+ROOKI is a real-time voice AI assistant powered by
+Google's Gemini Live API (audio streaming). It runs
+entirely on your Windows PC — no subscriptions, no
+cloud dependency beyond Gemini's free API key.
+
+It listens, sees your screen, controls your computer,
+remembers context across sessions, and talks back in
+<200 ms. Turkish & English.
+
+────────────────────────────────────────────────────────
+
+WHAT ROOKI CAN DO
+────────────────────────────────────────────────────────
+
+🎙️  REAL-TIME VOICE
+     Natural conversation. Interrupt with ESC key.
+     Works in Turkish or English — auto-detects.
+
+🖥️  SYSTEM CONTROL
+     Launch apps, volume/brightness, WiFi toggle,
+     shutdown/restart, keyboard shortcuts.
+
+👁️  VISION MODE
+     "Look at my screen" / "Look at my camera" —
+     ROOKI sees what you see and responds.
+
+🌐  WEB SEARCH
+     News, research, prices, comparisons — live results.
+
+📺  YOUTUBE
+     Search and play videos by voice.
+
+🎵  MUSIC PLAYER
+     Play local music files by voice commands.
+
+⏰  TIMER & REMINDERS
+     "Set a 5-minute timer" / "Remind me at 3 PM."
+
+📰  MORNING BRIEFING
+     On first boot: greeting + time + weather + news.
+
+🌤️  WEATHER
+     Live weather for your saved city.
+
+✈️  FLIGHT FINDER
+     Search live flight prices.
+
+💻  CODE HELPER
+     Code review, debug, generate snippets.
+
+📂  FILE PROCESSOR
+     Read, summarize, and answer questions about files.
+
+🖱️  BROWSER CONTROL
+     Open URLs, navigate tabs, click links — by voice.
+
+📨  SEND MESSAGE
+     Compose and send messages.
+
+🎮  GAME UPDATER
+     Check and trigger game updates.
+
+🔄  PROACTIVE CHECK-INS
+     After silence, ROOKI may suggest something useful.
+
+🧠  PERSISTENT MEMORY
+     Remembers your name, preferences, projects,
+     across sessions and restarts.
+
+🔔  DESKTOP NOTIFICATIONS
+     Native Windows toast notifications.
+
+📊  SYSTEM MONITOR
+     CPU, RAM, GPU temps — voice alerts on threshold.
+
+────────────────────────────────────────────────────────
+
+HOW TO INSTALL
+────────────────────────────────────────────────────────
+
+ 1. PREREQUISITES
+    ─ Windows 10/11
+    ─ Python 3.11 or 3.12
+    ─ Working microphone + speakers/headphones
+    ─ Internet connection
+    ─ Git (to clone)
+
+ 2. CLONE
+    ─ git clone https://github.com/MIRUN2303/jarvis.git
+    ─ cd jarvis/Mark-XLVIII
+
+ 3. VIRTUAL ENV (use uv for speed)
+    ─ pip install uv
+    ─ uv venv
+    ─ uv pip install -r requirements.txt
+
+ 4. API KEY
+    ─ Get a free Gemini API key from:
+      https://aistudio.google.com/apikey
+    ─ Edit config/api_keys.json:
+      { "gemini_api_key": "your-key-here" }
+    ─ Free tier: 20 requests/day (resets daily)
+
+ 5. RUN
+    ─ .venv\Scripts\python.exe main.py
+    ─ Or double-click run_rooki.bat
+
+────────────────────────────────────────────────────────
+
+HOW TO USE
+────────────────────────────────────────────────────────
+
+ 1. LAUNCH
+    ─ Run main.py (or double-click run_rooki.bat)
+    ─ A PyQt6 HUD window appears with waveform display
+
+ 2. FIRST BOOT
+    ─ ROOKI greets you automatically
+    ─ Speaks greeting + fetches news + weather
+    ─ Says your name if remembered
+
+ 3. TALK TO ROOKI
+    ─ Just speak naturally after the greeting
+    ─ Wait for the listening prompt (UI shows activity)
+    ─ ROOKI responds in <200 ms
+
+ 4. COMMANDS (examples)
+    ─ "What's the weather?"
+    ─ "Open Chrome"
+    ─ "Set volume to 50%"
+    ─ "Look at my screen"
+    ─ "Search for latest AI news"
+    ─ "Play Never Gonna Give You Up on YouTube"
+    ─ "Set a 5-minute timer"
+    ─ "Remind me to call mom at 5 PM"
+    ─ "Take a screenshot"
+    ─ "Translate hello to Spanish"
+    ─ "What files are in my downloads?"
+
+ 5. INTERRUPT
+    ─ Press ESC key at any time to cut ROOKI off
+    ─ Or click the INTERRUPT button on the HUD
+
+ 6. KEYBOARD INPUT
+    ─ Type directly in the HUD text field
+    ─ Press Enter to send
+
+ 7. WAKE / BARGE-IN
+    ─ VAD (Voice Activity Detection) at -20 dBFS
+    ─ Speak louder than background noise to trigger
+    ─ Noise floor at -21 dBFS is ignored
+
+────────────────────────────────────────────────────────
+
+TROUBLESHOOTING
+────────────────────────────────────────────────────────
+
+  ROOKI NOT RESPONDING
+    ─ Gemini free quota may be exhausted (20/day)
+    ─ Check console for "429" errors
+    ─ Wait for daily reset, or upgrade API key tier
+
+  MIC NOT DETECTED
+    ─ ROOKI uses your system's default microphone
+    ─ Check Windows Sound settings
+
+  NO AUDIO OUTPUT
+    ─ Check speaker/headphone connection
+    ─ Ensure volume is unmuted
+
+  VAD NOT TRIGGERING
+    ─ -20 dBFS threshold is locked — noise at -21 dBFS
+      is correctly rejected
+    ─ Speak clearly, closer to mic
+    ─ No threshold adjustment needed
+
+────────────────────────────────────────────────────────
+
+FILES
+────────────────────────────────────────────────────────
+
+  main.py                 Core loop — session, audio, tools
+  ui.py                   PyQt6 HUD window
+  core/audio_pipeline.py  Audio capture, VAD, AEC, noise gate
+  core/speech_manager.py  Speech state machine
+  config/api_keys.json    API keys configuration
+  actions/                30+ action modules
+  memory/                 Persistent memory store
+  run_rooki.bat           One-click launcher
+
+────────────────────────────────────────────────────────
+
+                     Built on Gemini Live API
+                   github.com/MIRUN2303/jarvis
