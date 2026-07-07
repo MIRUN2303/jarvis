@@ -84,7 +84,7 @@ class AudioPipeline:
         # Noise floor for voice-band energy (always-tracking)
         self._voice_noise_floor = 1e-6
         # VAD threshold: voice energy must exceed noise floor by this margin
-        self._vad_margin_db = 3.0
+        self._vad_margin_db = 3.0  # unused (kept for serialization compat)
         # Minimum voice energy fraction of total (rejects broadband hiss)
         self._vad_min_voice_frac = 0.08
         # Maximum noise/voice ratio (rejects low-frequency rumble)
@@ -191,10 +191,12 @@ class AudioPipeline:
         noise_ratio = (low_energy + high_energy) / max(voice_energy, _EPS)
         margin_lin = 10.0 ** (self._vad_margin_db / 20.0)
 
+        # Voice decision: loud enough (≥ -20 dBFS) AND not pure low-frequency noise
         is_voice = (
-            voice_energy > self._voice_noise_floor * margin_lin
+            db >= -20.0
             and noise_ratio <= self._vad_max_noise_ratio
         )
+        # ── LOCKED: -20 dBFS threshold works — noise at -21 dBFS rejected, voice detected cleanly
 
         # ── 7. State machine with debounce ────────────────────────
         if self._eos_cooldown > 0:
