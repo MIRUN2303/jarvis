@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Sensitive config / API keys
+config/api_keys.json
+
+# Memory / runtime data
+memory/long_term.json
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/

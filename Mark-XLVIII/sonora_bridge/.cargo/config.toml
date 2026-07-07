@@ -1,0 +1,2 @@
+[target.x86_64-pc-windows-msvc]
+linker = "C:\\Users\\mirun\\.rustup\\toolchains\\stable-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\gcc-ld\\lld-link.exe"

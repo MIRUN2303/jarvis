@@ -1,0 +1,12 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.Python
+*.log
+.vscode/
+.idea/
+Mark- v1.zip
+Mark-XLVIII/.venv/
+Mark-XLVIII-ref/
